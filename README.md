@@ -4,103 +4,18 @@ Minimal rendezvous service for reaching SSH behind NAT
 
 This enables SSH access to machines behind NAT/firewalls using a simple rendezvous server. No complex VPN setup required.
 
-| Command | Purpose |
-|---------|---------|
-| `mssh server` | Runs the rendezvous service on a public host |
-| `mssh agent <node-id>` | Keeps a connection open from a NATed host back to the server |
-| `mssh proxy <node-id>` / `mssh user@node` | Lets you connect from your workstation |
-
-## Table of Contents
-
-- [Installation](#installation)
-  - [Binary only](#binary-only)
-  - [Server (systemd)](#server-systemd)
-  - [Agent (systemd)](#agent-systemd)
-  - [Manual Build](#manual-build)
-  - [Uninstall](#uninstall)
-- [Configuration](#configuration)
-- [Usage](#usage)
-  - [Server](#server)
-  - [Agent](#agent)
-  - [Client](#client)
-- [Systemd Integration](#systemd-integration)
-- [Security](#security)
-- [License](#license)
-
-
-## Installation
-
-### Binary only
-
-```
-curl -fsSL https://raw.githubusercontent.com/eznix86/mssh/main/install/install.sh | sudo bash
-```
-
-The script downloads the correct release tarball for linux/amd64 or linux/arm64 and drops `/usr/local/bin/mssh` (override with `BIN_DIR=/path`).
-
-### Server (systemd)
-
-```
-curl -fsSL https://raw.githubusercontent.com/eznix86/mssh/main/install/install.sh | \
-  sudo BIN_DIR=/usr/local/bin bash -s -- server --host 0.0.0.0 --port 8443
-```
-
-This writes `/etc/systemd/system/mssh-server.service` and runs `systemctl enable --now mssh-server`.
-
-### Agent (systemd)
-
-```
-curl -fsSL https://raw.githubusercontent.com/eznix86/mssh/main/install/install.sh | \
-  sudo bash -s -- agent --server rendezvous.example.com:8443 --ssh-port 22
-```
-
-If you omit flags, the script prompts for the rendezvous server, node-id (defaults to auto-detected IP), and any extra CLI flags before rendering the unit.
-
-Set `VERSION=vX.Y.Z` to pin a specific release (default: latest).
-
-### Manual Build
-
-```bash
-go build ./cmd/mssh
-sudo install -m 0755 mssh /usr/local/bin/mssh
-```
-
-### Uninstall
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/eznix86/mssh/main/install/uninstall.sh | sudo bash
-```
-
-Removes the binary and disables all systemd units.
-
-## Configuration
-
-Only used for `mssh username@node-id`
-
-Initialize your config file:
-
-```bash
-mssh config init
-```
-
-This creates `~/.mssh/config.yaml`:
-
-```yaml
-server: rendezvous.example.com:8443
-identity: ~/.ssh/id_ed25519   # optional; leave blank to auto-detect keys / use ssh-agent
-nodes:
-  prod-db-1:
-    server: prod-rendezvous.example.com:8443
-    identity: ~/.ssh/prod_key
-```
-
-**Priority:** CLI flags → node-specific values → top-level defaults
+![mssh diagram](docs/mssh.png)
 
 ## Usage
 
 Deploy the server on a publicly reachable machine, run the agent on each host behind NAT, then connect from your workstation using either the built-in Go SSH client or the ProxyCommand approach described below.
 
-![mssh diagram](docs/mssh.png)
+
+| Command | Purpose |
+|---------|---------|
+| `mssh server` | Runs the rendezvous service on a public host |
+| `mssh agent <node-id>` | Keeps a connection open from a NATed host back to the server |
+| `mssh proxy <node-id>` / `mssh user@node` | Lets you connect from your workstation |
 
 ### Server
 
