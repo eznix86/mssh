@@ -6,7 +6,6 @@ This enables SSH access to machines behind NAT/firewalls using a simple rendezvo
 
 ## Table of Contents
 
-- [Features](#features)
 - [Installation](#installation)
   - [Quick Install (Linux)](#quick-install-linux)
   - [Manual Build](#manual-build)
@@ -22,22 +21,6 @@ This enables SSH access to machines behind NAT/firewalls using a simple rendezvo
 
 ---
 
-## Features
-
-- **Auto-reconnecting agents** – Node-id defaults to the host's primary IPv4 if omitted
-- **Built-in SSH client** – Passphrase prompts and ssh-agent support included
-- **Flexible configuration** – `~/.mssh/config.yaml` with global defaults and per-node overrides
-- **Systemd integration** – Ready-to-use units and install script for Linux (amd64/arm64)
-
-**Three simple commands:**
-
-| Command | Purpose |
-|---------|---------|
-| `mssh server` | Rendezvous server accepting agents and clients |
-| `mssh agent <node-id>` | Keeps a TCP tunnel from a remote host back to the server |
-| `mssh proxy <node-id>` | Connects to a node from your workstation |
-
----
 
 ## Installation
 
@@ -147,6 +130,17 @@ The client scans `~/.ssh/id_{ed25519,rsa,ecdsa}` (with passphrase prompts) and f
 ```bash
 ssh -o ProxyCommand="mssh proxy prod-db-1 --server rendezvous.example.com:8443" alice@localhost
 ```
+
+To make this seamless, add it to `~/.ssh/config` so `ssh prod-db` works without long command lines:
+
+```ssh-config
+Host prod-db
+    HostName localhost
+    User alice
+    ProxyCommand mssh proxy prod-db-1 --server rendezvous.example.com:8443
+```
+
+Now simply run `ssh prod-db` and the ProxyCommand will invoke `mssh proxy ...` behind the scenes.
 
 ---
 
