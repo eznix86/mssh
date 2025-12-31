@@ -1,0 +1,13 @@
+[Unit]
+Description=mssh agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mssh agent my-node --server rendezvous.example.com:8443 --ssh-port 22
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
