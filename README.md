@@ -99,7 +99,7 @@ curl -fsSL https://raw.githubusercontent.com/eznix86/mssh/main/install/install.s
   sudo bash -s -- agent --server rendezvous.example.com:8443 --ssh-port 22
 ```
 
-`--node-id` (defaults to auto-detected IP) can be set for a custom name.
+if `node-id` is omited, it defaults to auto-detected IP. Or set unique name.
 
 ### Manual Build
 
