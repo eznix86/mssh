@@ -2,39 +2,45 @@ package proxy
 
 import (
 	"bufio"
-	"errors"
+	"context"
 	"fmt"
-	"net"
-	"strconv"
-	"strings"
+	"time"
 
+	"github.com/eznix86/mssh/internal/protocol"
 	"github.com/eznix86/mssh/internal/stream"
+	"github.com/eznix86/mssh/internal/transport"
 )
 
-// Dial establishes a rendezvous proxy connection and returns a buffered connection.
-func Dial(opts Options) (*stream.BufferedConn, error) {
-	conn, err := net.Dial("tcp", net.JoinHostPort(opts.Host, strconv.Itoa(opts.Port)))
+func Dial(ctx context.Context, opts Options) (*stream.BufferedConn, error) {
+	token, err := transport.LoadToken(opts.Security.TokenFile)
+	if err != nil {
+		return nil, err
+	}
+	header, err := protocol.Header("CLIENT", opts.NodeID, token)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := transport.Dial(ctx, opts.Host, opts.Port, opts.Security)
 	if err != nil {
 		return nil, fmt.Errorf("connect proxy server: %w", err)
 	}
-
-	if _, err := fmt.Fprintf(conn, "CLIENT %s\n", opts.NodeID); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("send client header: %w", err)
+	success := false
+	defer func() {
+		if !success {
+			conn.Close()
+		}
+	}()
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	conn.SetDeadline(time.Now().Add(protocol.SetupTimeout + protocol.HeartbeatTimeout))
+	if err := protocol.WriteLine(conn, header); err != nil {
+		return nil, err
 	}
-
 	reader := bufio.NewReader(conn)
-	response, err := reader.ReadString('\n')
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("reading server response: %w", err)
+	if err := protocol.Expect(reader, "OK"); err != nil {
+		return nil, fmt.Errorf("connect node: %w", err)
 	}
-
-	trim := strings.TrimSpace(response)
-	if strings.HasPrefix(trim, "ERROR:") {
-		conn.Close()
-		return nil, errors.New(trim)
-	}
-
+	conn.SetDeadline(time.Time{})
+	success = true
 	return stream.Wrap(conn, reader), nil
 }

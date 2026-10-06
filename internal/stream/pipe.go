@@ -1,28 +1,41 @@
 package stream
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net"
-	"sync"
 )
 
-// Pipe forwards bytes in both directions until both sides close.
-func Pipe(a, b net.Conn) {
-	var wg sync.WaitGroup
-	copy := func(dst, src net.Conn) {
-		defer wg.Done()
-		_, _ = io.Copy(dst, src)
-		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
-			_ = cw.CloseWrite()
+func Pipe(ctx context.Context, a, b net.Conn) error {
+	closeBoth := func() { a.Close(); b.Close() }
+	defer closeBoth()
+	stop := context.AfterFunc(ctx, closeBoth)
+	defer stop()
+	results := make(chan error, 2)
+	transfer := func(dst, src net.Conn) {
+		_, err := io.Copy(dst, src)
+		if err != nil {
+			closeBoth()
+		} else if cw, ok := dst.(interface{ CloseWrite() error }); ok {
+			err = cw.CloseWrite()
+			if err != nil {
+				closeBoth()
+			}
 		} else {
-			_ = dst.Close()
+			dst.Close()
 		}
+		results <- err
 	}
-
-	wg.Add(2)
-	go copy(a, b)
-	go copy(b, a)
-	wg.Wait()
-	_ = a.Close()
-	_ = b.Close()
+	go transfer(a, b)
+	go transfer(b, a)
+	first, second := <-results, <-results
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err := errors.Join(first, second); err != nil {
+		return fmt.Errorf("copy tunnel: %w", err)
+	}
+	return nil
 }

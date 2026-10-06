@@ -41,3 +41,5 @@ func (b *BufferedConn) CloseRead() error {
 	}
 	return b.Conn.Close()
 }
+
+func (b *BufferedConn) Reader() *bufio.Reader { return b.reader }

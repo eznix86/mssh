@@ -6,6 +6,8 @@ This enables SSH access to machines behind NAT/firewalls using a simple rendezvo
 
 ![mssh diagram](docs/mssh.png)
 
+Read the [protocol migration and secure setup](docs/protocol.md) before upgrading.
+
 ## Usage
 
 Deploy the server on a publicly reachable machine, run the agent on each host behind NAT, then connect from your machines using either the built-in Go SSH client or the ProxyCommand approach described below.

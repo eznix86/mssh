@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/eznix86/mssh/internal/transport"
 	"gopkg.in/yaml.v3"
 )
 
@@ -13,15 +14,19 @@ var ErrNotFound = errors.New("config not found")
 
 // Config represents the structure stored in ~/.mssh/config.yaml.
 type Config struct {
-	Server   string               `yaml:"server"`
-	Identity string               `yaml:"identity,omitempty"`
-	Nodes    map[string]NodeEntry `yaml:"nodes,omitempty"`
+	Server             string               `yaml:"server"`
+	Identity           string               `yaml:"identity,omitempty"`
+	Nodes              map[string]NodeEntry `yaml:"nodes,omitempty"`
+	transport.Security `yaml:",inline"`
 }
 
 // NodeEntry contains optional overrides for a specific node-id.
 type NodeEntry struct {
-	Server   string `yaml:"server,omitempty"`
-	Identity string `yaml:"identity,omitempty"`
+	Server    string `yaml:"server,omitempty"`
+	Identity  string `yaml:"identity,omitempty"`
+	TLS       *bool  `yaml:"tls,omitempty"`
+	CAFile    string `yaml:"tls_ca,omitempty"`
+	TokenFile string `yaml:"token_file,omitempty"`
 }
 
 // Path returns the path to the config file.
@@ -88,4 +93,22 @@ func (c Config) IdentityFor(nodeID string) string {
 		}
 	}
 	return c.Identity
+}
+
+func (c Config) SecurityFor(node string) transport.Security {
+	security := c.Security
+	entry, ok := c.Nodes[node]
+	if !ok {
+		return security
+	}
+	if entry.TLS != nil {
+		security.TLS = *entry.TLS
+	}
+	if entry.CAFile != "" {
+		security.CAFile = entry.CAFile
+	}
+	if entry.TokenFile != "" {
+		security.TokenFile = entry.TokenFile
+	}
+	return security
 }

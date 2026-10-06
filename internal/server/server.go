@@ -3,147 +3,224 @@ package server
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"log"
 	"net"
-	"regexp"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/eznix86/mssh/internal/protocol"
 	"github.com/eznix86/mssh/internal/stream"
+	"github.com/eznix86/mssh/internal/transport"
 )
 
-// Options describes the server bind address.
 type Options struct {
-	Host string
-	Port int
+	Host           string
+	Port           int
+	TLSCert        string
+	TLSKey         string
+	TokenFile      string
+	MaxConnections int
 }
 
-// Server implements the rendezvous service.
+type registration struct {
+	pair chan *stream.BufferedConn
+	busy bool
+	done chan struct{}
+}
+
 type Server struct {
-	opts   Options
-	mu     sync.Mutex
-	agents map[string]*stream.BufferedConn
+	opts        Options
+	mu          sync.Mutex
+	agents      map[string]*registration
+	connections map[net.Conn]struct{}
+	token       string
+	heartbeat   time.Duration
 }
 
-var nodeIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
-
-// New initializes a new Server.
 func New(opts Options) *Server {
-	return &Server{opts: opts, agents: make(map[string]*stream.BufferedConn)}
+	if opts.MaxConnections <= 0 {
+		opts.MaxConnections = 1024
+	}
+	return &Server{
+		opts: opts, agents: make(map[string]*registration), connections: make(map[net.Conn]struct{}),
+		heartbeat: protocol.HeartbeatInterval,
+	}
 }
 
-// Run starts accepting incoming connections until the context is canceled.
 func (s *Server) Run(ctx context.Context) error {
-	addr := net.JoinHostPort(s.opts.Host, strconv.Itoa(s.opts.Port))
-	listener, err := net.Listen("tcp", addr)
+	token, err := transport.LoadToken(s.opts.TokenFile)
 	if err != nil {
 		return err
 	}
-	log.Printf("[server] listening on %s", addr)
+	listener, err := transport.Listen(s.opts.Host, s.opts.Port, s.opts.TLSCert, s.opts.TLSKey, token)
+	if err != nil {
+		return err
+	}
+	return s.serve(ctx, listener, token)
+}
 
+func (s *Server) serve(ctx context.Context, listener net.Listener, token string) error {
+	s.token = token
+	log.Printf("[server] listening on %s", listener.Addr())
 	defer listener.Close()
-
-	go func() {
-		<-ctx.Done()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var handlers sync.WaitGroup
+	shutdownDone := make(chan struct{})
+	context.AfterFunc(ctx, func() {
+		defer close(shutdownDone)
 		listener.Close()
-	}()
-
+		s.mu.Lock()
+		for conn := range s.connections {
+			conn.SetDeadline(time.Now())
+			conn.Close()
+		}
+		s.mu.Unlock()
+	})
+	defer func() { cancel(); <-shutdownDone; handlers.Wait() }()
+	slots := make(chan struct{}, s.opts.MaxConnections)
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			select {
-			case <-ctx.Done():
+			if ctx.Err() != nil {
 				return nil
-			default:
-				log.Printf("[server] accept error: %v", err)
 			}
+			return fmt.Errorf("accept connection: %w", err)
+		}
+		select {
+		case slots <- struct{}{}:
+		default:
+			conn.Close()
 			continue
 		}
-		go s.handleConn(conn)
+		s.mu.Lock()
+		if ctx.Err() != nil {
+			s.mu.Unlock()
+			conn.Close()
+			<-slots
+			return nil
+		}
+		s.connections[conn] = struct{}{}
+		s.mu.Unlock()
+		handlers.Add(1)
+		go func() {
+			defer handlers.Done()
+			defer func() {
+				conn.Close()
+				s.mu.Lock()
+				delete(s.connections, conn)
+				s.mu.Unlock()
+				<-slots
+			}()
+			s.handleConn(ctx, conn)
+		}()
 	}
 }
 
-func (s *Server) handleConn(raw net.Conn) {
+func (s *Server) handleConn(ctx context.Context, raw net.Conn) {
+	raw.SetDeadline(time.Now().Add(protocol.SetupTimeout))
 	reader := bufio.NewReader(raw)
-	raw.SetReadDeadline(time.Now().Add(30 * time.Second))
-	line, err := reader.ReadString('\n')
+	line, err := protocol.ReadLine(reader)
 	if err != nil {
-		log.Printf("[server] failed reading header: %v", err)
-		raw.Close()
 		return
 	}
-	raw.SetReadDeadline(time.Time{})
-
-	parts := strings.Fields(strings.TrimSpace(line))
-	if len(parts) != 2 {
-		log.Printf("[server] invalid header: %q", line)
-		raw.Write([]byte("ERROR: invalid header\n"))
-		raw.Close()
+	kind, node, token, err := protocol.ParseHeader(line)
+	if err != nil {
+		protocol.WriteLine(raw, "ERROR: invalid protocol header")
 		return
 	}
-
-	typ := strings.ToUpper(parts[0])
-	nodeID := parts[1]
-	if !nodeIDPattern.MatchString(nodeID) {
-		log.Printf("[server] invalid node-id format: %s", nodeID)
-		raw.Write([]byte("ERROR: invalid node-id\n"))
-		raw.Close()
+	if !transport.TokenMatches(s.token, token) {
+		protocol.WriteLine(raw, "ERROR: unauthorized")
 		return
 	}
 	conn := stream.Wrap(raw, reader)
-
-	switch typ {
+	switch kind {
 	case "AGENT":
-		s.registerAgent(conn, nodeID)
+		s.registerAgent(ctx, conn, node)
 	case "CLIENT":
-		s.handleClient(conn, nodeID)
-	default:
-		log.Printf("[server] unknown type %q", typ)
-		raw.Write([]byte("ERROR: unknown type\n"))
-		raw.Close()
+		s.handleClient(ctx, conn, node)
 	}
 }
 
-func (s *Server) registerAgent(conn *stream.BufferedConn, nodeID string) {
+func (s *Server) registerAgent(ctx context.Context, conn *stream.BufferedConn, node string) {
+	entry := &registration{pair: make(chan *stream.BufferedConn, 1), done: make(chan struct{})}
 	s.mu.Lock()
-	if _, exists := s.agents[nodeID]; exists {
+	if _, exists := s.agents[node]; exists {
 		s.mu.Unlock()
-		log.Printf("[server] agent collision for node %s", nodeID)
-		conn.Write([]byte("ERROR: node-id already registered\n"))
-		conn.Close()
+		protocol.WriteLine(conn, "ERROR: node-id already registered")
 		return
 	}
-	s.agents[nodeID] = conn
-	total := len(s.agents)
+	s.agents[node] = entry
 	s.mu.Unlock()
-
-	log.Printf("[server] agent connected: %s (total: %d)", nodeID, total)
-	conn.Write([]byte("OK\n"))
-}
-
-func (s *Server) handleClient(conn *stream.BufferedConn, nodeID string) {
-	agentConn := s.popAgent(nodeID)
-	if agentConn == nil {
-		conn.Write([]byte("ERROR: agent offline\n"))
-		conn.Close()
+	defer func() {
+		defer close(entry.done)
+		s.mu.Lock()
+		if s.agents[node] == entry {
+			delete(s.agents, node)
+		}
+		s.mu.Unlock()
+	}()
+	if err := protocol.WriteLine(conn, "OK"); err != nil {
 		return
 	}
-
-	log.Printf("[server] pairing client with %s", nodeID)
-	conn.Write([]byte("OK\n"))
-	stream.Pipe(agentConn, conn)
-	log.Printf("[server] connection closed: %s", nodeID)
+	conn.SetDeadline(time.Time{})
+	ticker := time.NewTicker(s.heartbeat)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case client := <-entry.pair:
+			conn.SetDeadline(time.Now().Add(protocol.SetupTimeout))
+			if err := protocol.WriteLine(conn, "CONNECT"); err != nil {
+				return
+			}
+			if err := protocol.Expect(conn.Reader(), "READY"); err != nil {
+				protocol.WriteLine(client, "ERROR: agent could not open SSH")
+				return
+			}
+			if err := protocol.WriteLine(client, "OK"); err != nil {
+				return
+			}
+			conn.SetDeadline(time.Time{})
+			client.SetDeadline(time.Time{})
+			if err := stream.Pipe(ctx, conn, client); err != nil && ctx.Err() == nil {
+				log.Printf("[server] tunnel %s: %v", node, err)
+			}
+			return
+		case <-ticker.C:
+			conn.SetDeadline(time.Now().Add(protocol.HeartbeatTimeout))
+			if err := protocol.WriteLine(conn, "PING"); err != nil {
+				return
+			}
+			if err := protocol.Expect(conn.Reader(), "PONG"); err != nil {
+				return
+			}
+			conn.SetDeadline(time.Time{})
+		}
+	}
 }
 
-func (s *Server) popAgent(nodeID string) *stream.BufferedConn {
+func (s *Server) handleClient(ctx context.Context, conn *stream.BufferedConn, node string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	agent, ok := s.agents[nodeID]
-	if !ok {
-		return nil
+	entry := s.agents[node]
+	if entry == nil {
+		s.mu.Unlock()
+		protocol.WriteLine(conn, "ERROR: agent offline")
+		return
 	}
-	delete(s.agents, nodeID)
-	return agent
+	if entry.busy {
+		s.mu.Unlock()
+		protocol.WriteLine(conn, "ERROR: agent busy")
+		return
+	}
+	entry.busy = true
+	conn.SetDeadline(time.Now().Add(protocol.SetupTimeout + protocol.HeartbeatTimeout))
+	entry.pair <- conn
+	s.mu.Unlock()
+	select {
+	case <-ctx.Done():
+	case <-entry.done:
+	}
 }
