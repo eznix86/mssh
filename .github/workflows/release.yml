@@ -42,12 +42,14 @@ jobs:
           mkdir -p dist
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 go build -ldflags="-X main.version=${GITHUB_REF_NAME}" -o mssh ./cmd/mssh
           tar -czf dist/${{ matrix.asset }} mssh
+          cd dist
+          sha256sum ${{ matrix.asset }} > ${{ matrix.asset }}.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
-          path: dist/${{ matrix.asset }}
+          path: dist/*
 
   publish:
     name: publish-release
@@ -62,6 +64,8 @@ jobs:
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/**/*.tar.gz
+          files: |
+            dist/**/*.tar.gz
+            dist/**/*.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

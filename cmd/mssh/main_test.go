@@ -79,6 +79,16 @@ func TestConnectionFlagsOverrideNodeSecurity(t *testing.T) {
 	}
 }
 
+func TestExplicitNoTLSOverridesConfiguredTLS(t *testing.T) {
+	server, ca, token, tls, tlsSet := "", "", "", false, true
+	flags := connectionFlags{server: &server, ca: &ca, token: &token, tls: &tls, tlsSet: &tlsSet}
+	cfg := config.Config{Security: transport.Security{TLS: true, CAFile: "private-ca"}}
+	security := flags.security(cfg, "node")
+	if security.TLS || security.CAFile != "" {
+		t.Fatalf("security: %+v", security)
+	}
+}
+
 func TestPathExpansionPreservesNamedUsersAndRelativePaths(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -254,7 +264,7 @@ func TestRemoteShellFailureReturnsAndClosesConnection(t *testing.T) {
 
 func TestSSHProcess(t *testing.T) {
 	if os.Getenv("MSSH_TEST_PROCESS") != "1" {
-		return
+		t.Skip("subprocess helper")
 	}
 	os.Args = []string{"mssh", "ssh", "alice@node", "--server", os.Getenv("MSSH_TEST_SERVER"),
 		"--identity", os.Getenv("MSSH_TEST_IDENTITY")}

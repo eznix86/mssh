@@ -1,6 +1,7 @@
 package config
 
 import (
+	"github.com/eznix86/mssh/internal/transport"
 	"os"
 	"path/filepath"
 	"testing"
@@ -27,5 +28,15 @@ func TestSecuritySettingsLoadAndUseNodeOverrides(t *testing.T) {
 	security = cfg.SecurityFor("other")
 	if !security.TLS || security.TokenFile != "global-token" || security.CAFile != "" {
 		t.Fatalf("global security: %+v", security)
+	}
+}
+
+func TestNodeCanDisableInheritedTLS(t *testing.T) {
+	disabled := false
+	cfg := Config{Security: transport.Security{TLS: true, CAFile: "global-ca"},
+		Nodes: map[string]NodeEntry{"local": {TLS: &disabled}}}
+	security := cfg.SecurityFor("local")
+	if security.TLS || security.CAFile != "" {
+		t.Fatalf("security: %+v", security)
 	}
 }

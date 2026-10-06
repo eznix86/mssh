@@ -176,14 +176,17 @@ func runProxy(ctx context.Context, nodeID, serverAddr string, security transport
 type connectionFlags struct {
 	server *string
 	tls    *bool
+	tlsSet *bool
 	ca     *string
 	token  *string
 }
 
 func addConnectionFlags(command *kingpin.CmdClause) connectionFlags {
+	tlsSet := new(bool)
 	return connectionFlags{
+		tlsSet: tlsSet,
 		server: command.Flag("server", "Rendezvous server host:port").String(),
-		tls:    command.Flag("tls", "Use verified TLS for rendezvous").Bool(),
+		tls:    command.Flag("tls", "Use verified TLS for rendezvous").IsSetByUser(tlsSet).Bool(),
 		ca:     command.Flag("tls-ca", "TLS CA certificate file (enables TLS)").String(),
 		token:  command.Flag("token-file", "Shared rendezvous token file").String(),
 	}
@@ -191,8 +194,11 @@ func addConnectionFlags(command *kingpin.CmdClause) connectionFlags {
 
 func (flags connectionFlags) security(cfg config.Config, node string) transport.Security {
 	security := cfg.SecurityFor(node)
-	if *flags.tls {
-		security.TLS = true
+	if *flags.tls || (flags.tlsSet != nil && *flags.tlsSet) {
+		security.TLS = *flags.tls
+		if !security.TLS {
+			security.CAFile = ""
+		}
 	}
 	if *flags.ca != "" {
 		security.CAFile = *flags.ca

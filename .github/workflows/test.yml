@@ -19,3 +19,4 @@ jobs:
       - run: go vet ./...
       - run: go build ./cmd/mssh
       - run: bash -n install/install.sh install/uninstall.sh
+      - run: python3 install/test_install.py -v
