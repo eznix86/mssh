@@ -1,22 +1,27 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/eznix86/mssh/internal/protocol"
 	"github.com/eznix86/mssh/internal/proxy"
+	"github.com/eznix86/mssh/internal/transport"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
-func runSSH(user, node, serverAddr, identity string) error {
+func runSSH(ctx context.Context, user, node, serverAddr, identity string, security transport.Security) error {
 	serverOpts, err := proxy.ParseServerAddr(serverAddr)
 	if err != nil {
 		return fmt.Errorf("invalid server address: %w", err)
 	}
 	serverOpts.NodeID = node
+	serverOpts.Security = security
 
 	auth, cleanupAgent, err := buildAuthMethods(identity)
 	if err != nil {
@@ -30,12 +35,15 @@ func runSSH(user, node, serverAddr, identity string) error {
 	if err != nil {
 		return err
 	}
-	conn, err := proxy.Dial(serverOpts)
+	conn, err := proxy.Dial(ctx, serverOpts)
 	if err != nil {
 		return err
 	}
 
 	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	conn.SetDeadline(time.Now().Add(protocol.SetupTimeout))
 
 	config := &ssh.ClientConfig{
 		User:            user,
@@ -47,6 +55,7 @@ func runSSH(user, node, serverAddr, identity string) error {
 	if err != nil {
 		return fmt.Errorf("ssh handshake failed: %w", err)
 	}
+	conn.SetDeadline(time.Time{})
 	client := ssh.NewClient(clientConn, chans, reqs)
 	defer client.Close()
 

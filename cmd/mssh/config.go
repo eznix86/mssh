@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/eznix86/mssh/internal/config"
@@ -25,16 +24,15 @@ func parseTarget(target string) (string, string, error) {
 	return user, node, nil
 }
 
-func loadConfig() config.Config {
+func loadConfig() (config.Config, error) {
 	cfg, err := config.Load()
-	if err != nil {
-		if errors.Is(err, config.ErrNotFound) {
-			return config.Config{}
-		}
-		log.Printf("[config] warning: %v (continuing with defaults)", err)
-		return config.Config{}
+	if errors.Is(err, config.ErrNotFound) {
+		return config.Config{}, nil
 	}
-	return cfg
+	if err != nil {
+		return config.Config{}, fmt.Errorf("load config: %w", err)
+	}
+	return cfg, nil
 }
 
 func resolveServer(flagValue string, cfg config.Config, nodeID string) (string, error) {

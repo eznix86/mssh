@@ -2,86 +2,104 @@ package agent
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"log"
 	"net"
 	"strconv"
-	"strings"
 	"time"
 
+	"github.com/eznix86/mssh/internal/protocol"
 	"github.com/eznix86/mssh/internal/stream"
+	"github.com/eznix86/mssh/internal/transport"
 )
 
-// Options defines how the agent connects.
 type Options struct {
-	Host    string
-	Port    int
-	NodeID  string
-	SSHPort int
+	Host     string
+	Port     int
+	NodeID   string
+	SSHPort  int
+	Security transport.Security
 }
 
-// ParseServerAddr converts host:port into Options with only network fields set.
 func ParseServerAddr(addr string) (Options, error) {
-	host, port, err := parseAddr(addr)
+	host, port, err := transport.ParseAddr(addr)
 	if err != nil {
 		return Options{}, err
 	}
 	return Options{Host: host, Port: port}, nil
 }
 
-func parseAddr(raw string) (string, int, error) {
-	host, portStr, err := net.SplitHostPort(raw)
-	if err != nil {
-		return "", 0, err
+func Run(ctx context.Context, opts Options) error {
+	if !protocol.ValidNode(opts.NodeID) || opts.SSHPort < 1 || opts.SSHPort > 65535 {
+		return fmt.Errorf("invalid node-id or SSH port")
 	}
-	port, err := strconv.Atoi(portStr)
+	token, err := transport.LoadToken(opts.Security.TokenFile)
 	if err != nil {
-		return "", 0, err
+		return err
 	}
-	return host, port, nil
-}
-
-// Run connects the agent to the rendezvous server and continually proxies SSH traffic.
-func Run(opts Options) error {
 	for {
-		if err := runOnce(opts); err != nil {
-			log.Printf("[agent] error: %v", err)
+		if err := runOnce(ctx, opts, token); err != nil && ctx.Err() == nil {
+			log.Printf("[agent] %v", err)
 		}
-		log.Printf("[agent] reconnecting to rendezvous server in 2s...")
-		time.Sleep(2 * time.Second)
+		timer := time.NewTimer(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil
+		case <-timer.C:
+		}
 	}
 }
 
-func runOnce(opts Options) error {
-	srvAddr := net.JoinHostPort(opts.Host, strconv.Itoa(opts.Port))
-	conn, err := net.Dial("tcp", srvAddr)
+func runOnce(ctx context.Context, opts Options, token string) error {
+	conn, err := transport.Dial(ctx, opts.Host, opts.Port, opts.Security)
 	if err != nil {
-		return fmt.Errorf("connect to server: %w", err)
+		return fmt.Errorf("connect rendezvous server: %w", err)
 	}
 	defer conn.Close()
-
-	if _, err := fmt.Fprintf(conn, "AGENT %s\n", opts.NodeID); err != nil {
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	conn.SetDeadline(time.Now().Add(protocol.SetupTimeout))
+	header, err := protocol.Header("AGENT", opts.NodeID, token)
+	if err != nil {
+		return err
+	}
+	if err := protocol.WriteLine(conn, header); err != nil {
+		return err
+	}
+	reader := bufio.NewReader(conn)
+	if err := protocol.Expect(reader, "OK"); err != nil {
 		return fmt.Errorf("register agent: %w", err)
 	}
-
-	reader := bufio.NewReader(conn)
-	response, err := reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("wait ack: %w", err)
+	log.Printf("[agent] registered as %s", opts.NodeID)
+	for {
+		conn.SetReadDeadline(time.Now().Add(protocol.HeartbeatTimeout + protocol.HeartbeatInterval))
+		message, err := protocol.ReadLine(reader)
+		if err != nil {
+			return err
+		}
+		conn.SetWriteDeadline(time.Now().Add(protocol.SetupTimeout))
+		switch message {
+		case "PING":
+			if err := protocol.WriteLine(conn, "PONG"); err != nil {
+				return err
+			}
+		case "CONNECT":
+			dialer := &net.Dialer{Timeout: protocol.SetupTimeout}
+			sshConn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.SSHPort)))
+			if err != nil {
+				protocol.WriteLine(conn, "ERROR: local SSH unavailable")
+				return fmt.Errorf("connect local SSH: %w", err)
+			}
+			defer sshConn.Close()
+			if err := protocol.WriteLine(conn, "READY"); err != nil {
+				return err
+			}
+			conn.SetDeadline(time.Time{})
+			return stream.Pipe(ctx, stream.Wrap(conn, reader), sshConn)
+		default:
+			return fmt.Errorf("unexpected agent control message %q", message)
+		}
 	}
-	if strings.TrimSpace(response) != "OK" {
-		return fmt.Errorf("registration failed: %s", strings.TrimSpace(response))
-	}
-
-	sshConn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", opts.SSHPort))
-	if err != nil {
-		return fmt.Errorf("connect to ssh: %w", err)
-	}
-	defer sshConn.Close()
-
-	log.Printf("[agent] registered as %s, piping traffic", opts.NodeID)
-	serverConn := stream.Wrap(conn, reader)
-	stream.Pipe(serverConn, sshConn)
-	log.Printf("[agent] client disconnected")
-	return nil
 }
