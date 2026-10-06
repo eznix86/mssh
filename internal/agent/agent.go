@@ -53,7 +53,7 @@ func Run(opts Options) error {
 }
 
 func runOnce(opts Options) error {
-	srvAddr := fmt.Sprintf("%s:%d", opts.Host, opts.Port)
+	srvAddr := net.JoinHostPort(opts.Host, strconv.Itoa(opts.Port))
 	conn, err := net.Dial("tcp", srvAddr)
 	if err != nil {
 		return fmt.Errorf("connect to server: %w", err)
