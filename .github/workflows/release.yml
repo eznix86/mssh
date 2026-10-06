@@ -40,7 +40,7 @@ jobs:
       - name: Build
         run: |
           mkdir -p dist
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 go build -o mssh ./cmd/mssh
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 go build -ldflags="-X main.version=${GITHUB_REF_NAME}" -o mssh ./cmd/mssh
           tar -czf dist/${{ matrix.asset }} mssh
 
       - name: Upload artifact

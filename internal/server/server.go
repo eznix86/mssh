@@ -3,10 +3,10 @@ package server
 import (
 	"bufio"
 	"context"
-	"fmt"
 	"log"
 	"net"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,7 +36,7 @@ func New(opts Options) *Server {
 
 // Run starts accepting incoming connections until the context is canceled.
 func (s *Server) Run(ctx context.Context) error {
-	addr := fmt.Sprintf("%s:%d", s.opts.Host, s.opts.Port)
+	addr := net.JoinHostPort(s.opts.Host, strconv.Itoa(s.opts.Port))
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err

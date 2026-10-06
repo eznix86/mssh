@@ -2,8 +2,10 @@ package proxy
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 
 	"github.com/eznix86/mssh/internal/stream"
@@ -11,7 +13,7 @@ import (
 
 // Dial establishes a rendezvous proxy connection and returns a buffered connection.
 func Dial(opts Options) (*stream.BufferedConn, error) {
-	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", opts.Host, opts.Port))
+	conn, err := net.Dial("tcp", net.JoinHostPort(opts.Host, strconv.Itoa(opts.Port)))
 	if err != nil {
 		return nil, fmt.Errorf("connect proxy server: %w", err)
 	}
@@ -31,7 +33,7 @@ func Dial(opts Options) (*stream.BufferedConn, error) {
 	trim := strings.TrimSpace(response)
 	if strings.HasPrefix(trim, "ERROR:") {
 		conn.Close()
-		return nil, fmt.Errorf(trim)
+		return nil, errors.New(trim)
 	}
 
 	return stream.Wrap(conn, reader), nil
