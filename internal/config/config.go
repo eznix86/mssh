@@ -103,6 +103,9 @@ func (c Config) SecurityFor(node string) transport.Security {
 	}
 	if entry.TLS != nil {
 		security.TLS = *entry.TLS
+		if !security.TLS {
+			security.CAFile = ""
+		}
 	}
 	if entry.CAFile != "" {
 		security.CAFile = entry.CAFile

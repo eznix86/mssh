@@ -20,6 +20,10 @@ if [ "${SUDO:-unset}" = "unset" ]; then
 fi
 
 BIN_DIR="${BIN_DIR:-/usr/local/bin}"
+case "$BIN_DIR" in
+  /*) ;;
+  *) echo "[uninstall] BIN_DIR must be an absolute path" >&2; exit 1 ;;
+esac
 
 remove_unit() {
   local unit="$1"

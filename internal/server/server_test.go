@@ -355,8 +355,8 @@ func TestShutdownClosesConnectionsBeforeReturning(t *testing.T) {
 	cancel()
 	for _, conn := range []net.Conn{registered, pending} {
 		conn.SetReadDeadline(time.Now().Add(time.Second))
-		if _, err := conn.Read(make([]byte, 1)); err == nil {
-			t.Fatal("connection remained open")
+		if _, err := io.ReadAll(conn); err != nil {
+			t.Fatalf("connection did not close: %v", err)
 		}
 	}
 }

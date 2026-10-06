@@ -12,7 +12,7 @@ mssh agent prod-db-1 --server rendezvous.example.com:8443 --tls --token-file ~/.
 mssh alice@prod-db-1 --server rendezvous.example.com:8443 --tls --token-file ~/.mssh/token
 ```
 
-The TLS certificate must cover the server hostname. Clients verify it against system roots. Use `--tls-ca /path/to/ca.pem` for a private CA. This flag enables TLS. There is no option to skip certificate verification. Do not connect a plain TCP client directly to a TLS proxy. An external proxy must pass TLS through to mssh, or terminate it through a separate TLS tunnel on each client.
+The TLS certificate must cover the server hostname. Clients verify it against system roots. Use `--tls-ca /path/to/ca.pem` for a private CA. This flag enables TLS. There is no option to skip certificate verification. Do not connect a plain TCP client directly to a TLS proxy. An external proxy can pass TLS through to mssh, or terminate TLS and forward to a loopback mssh listener. Clients still use `--tls` when the proxy terminates TLS. Configure the loopback backend with `--token-file`.
 
 SSH host keys remain a separate check. The built-in client requires a trusted key under the node ID in `~/.ssh/known_hosts`, using logical port 22 even when the agent uses another local SSH port. Get the key from the node through a trusted channel. For example, prepend `prod-db-1` to the contents of `/etc/ssh/ssh_host_ed25519_key.pub` obtained through that channel. Do not trust an unverified key from the rendezvous server.
 
